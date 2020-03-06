@@ -19,7 +19,7 @@ namespace Stef.RedisTaskQueue
         {
             _Subscriber = subscriber;
             _Handler = handler;
-            _TaskQueueWorkingQueueName = string.Concat(TaskQueueConstants.WORKING_PREFIX, id);
+            _TaskQueueWorkingQueueName = string.Concat(TaskQueueConstants.PREFIX_WORKING, id);
 
             RestoreHangingJobs();
             SubscribeToNewJobs();
@@ -123,11 +123,23 @@ namespace Stef.RedisTaskQueue
                 .GetConnection()
                 .GetDatabase();
 
-            return database
+            var itemList = database
                 .HashGetAll(TaskQueueConstants.INFO_NAME)
                 .Select(c => new TaskQueueCountItem(c.Name, (long)c.Value))
                 .Where(c => c.Count > 0)
                 .ToList();
+
+            var hasHighPriority = itemList
+                .Any(c => c.TaskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY));
+
+            if (hasHighPriority)
+            {
+                return itemList
+                    .Where(c => c.TaskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY))
+                    .ToList();
+            }
+
+            return itemList;
         }
 
         private void HandleJob(string taskQueueName, RedisValue value)

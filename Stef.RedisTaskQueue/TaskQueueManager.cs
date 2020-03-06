@@ -25,14 +25,14 @@ namespace Stef.RedisTaskQueue
             }
         }
 
-        public void AddJob(string taskQueueName, string jobInfo)
+        public void AddJob(string taskQueueName, string jobInfo, bool isHighPriority = false)
         {
             var database = RedisManager
                 .Current
                 .GetConnection()
                 .GetDatabase();
 
-            taskQueueName = GetLongTaskQueueName(taskQueueName);
+            taskQueueName = GetLongTaskQueueName(taskQueueName, isHighPriority);
 
             var trans = database.CreateTransaction();
 
@@ -85,17 +85,23 @@ namespace Stef.RedisTaskQueue
             _Worker = null;
         }
 
-        internal string GetLongTaskQueueName(string taskQueueName)
+        internal string GetLongTaskQueueName(string taskQueueName, bool isHighPriority)
         {
-            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX))
+            var prefix = isHighPriority
+                ? TaskQueueConstants.PREFIX_HIGH_PRIORITY
+                : TaskQueueConstants.PREFIX_NORMAL_PRIORITY;
+
+            if (taskQueueName.StartsWith(prefix))
                 return taskQueueName;
             else
-                return string.Concat(TaskQueueConstants.PREFIX, taskQueueName);
+                return string.Concat(prefix, taskQueueName);
         }
         internal string GetShortTaskQueueName(string taskQueueName)
         {
-            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX))
-                return taskQueueName.Substring(TaskQueueConstants.PREFIX.Length);
+            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX_NORMAL_PRIORITY))
+                return taskQueueName.Substring(TaskQueueConstants.PREFIX_NORMAL_PRIORITY.Length);
+            else if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY))
+                return taskQueueName.Substring(TaskQueueConstants.PREFIX_HIGH_PRIORITY.Length);
             else
                 return taskQueueName;
         }
