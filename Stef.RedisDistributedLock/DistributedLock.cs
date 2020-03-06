@@ -27,11 +27,10 @@ namespace Stef.RedisDistributedLock
 
         private void TryGetLock()
         {
-            var redis = RedisManager
+            var database = RedisManager
                 .Current
-                .GetConnection();
-
-            var database = redis.GetDatabase();
+                .GetConnection()
+                .GetDatabase();
 
             var start = DateTime.Now;
             Random random = null;

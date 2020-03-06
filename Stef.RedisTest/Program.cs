@@ -37,30 +37,22 @@ namespace Stef.RedisTest
                 .Current
                 .CleanUp();
 
-            if (isWorker)
-            {
-                TaskQueueManager
-                    .Current
-                    .StartWorker(new TaskQueueJobHandler());
-            }
-            else
-            {
-                while (true)
-                {
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST01", "A");
-                    TaskQueueManager.Current.AddJob("TEST02", "B");
-                    TaskQueueManager.Current.AddJob("TEST02", "B");
-                    TaskQueueManager.Current.AddJob("TEST02", "B");
-                    TaskQueueManager.Current.AddJob("TEST03", "C");
+            TaskQueueManager
+                .Current
+                .StartWorker(new TaskQueueJobHandler(), "TEST");
 
-                    Console.ReadLine();
-                }
-            }
+            //return;
+
+            TaskQueueManager.Current.AddJob("TEST01", "1");
+            TaskQueueManager.Current.AddJob("TEST01", "2");
+            TaskQueueManager.Current.AddJob("TEST01", "3");
+            TaskQueueManager.Current.AddJob("TEST01", "4");
+            TaskQueueManager.Current.AddJob("TEST01", "5");
+            TaskQueueManager.Current.AddJob("TEST01", "6");
+            TaskQueueManager.Current.AddJob("TEST02", "7");
+            TaskQueueManager.Current.AddJob("TEST02", "8");
+            TaskQueueManager.Current.AddJob("TEST02", "9");
+            TaskQueueManager.Current.AddJob("TEST03", "10");
         }
 
         private static void RunLockTask(string taskName, bool throwException = false, int stealSeconds = -1)

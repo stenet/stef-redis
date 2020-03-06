@@ -7,14 +7,6 @@ namespace Stef.RedisTaskQueue
 {
     public class TaskQueueManager
     {
-        private const string TASK_QUEUE_PREFIX = "TASK_QUEUE_";
-
-        internal const string TASK_QUEUE_COUNT_NAME = "TASK_QUEUE_COUNT";
-        internal const string TASK_QUEUE_WORKING_NAME = "TASK_QUEUE_WORKING";
-
-        internal const string TASK_QUEUE_CHANNEL = "JOB_QUEUE";
-        internal const string TASK_QUEUE_NEW_JOB = "TASK_QUEUE_NEW_ITEMS";
-
         private static Lazy<TaskQueueManager> _Current = new Lazy<TaskQueueManager>(() => new TaskQueueManager());
 
         private TaskQueueWorker _Worker;
@@ -33,59 +25,56 @@ namespace Stef.RedisTaskQueue
             }
         }
 
-        public void AddJob(string taskQueue, string jobInfo)
+        public void AddJob(string taskQueueName, string jobInfo)
         {
-            var redis = RedisManager
+            var database = RedisManager
                 .Current
-                .GetConnection();
+                .GetConnection()
+                .GetDatabase();
 
-            var db = redis.GetDatabase();
+            taskQueueName = GetLongTaskQueueName(taskQueueName);
 
-            var taskQueueName = taskQueue.StartsWith(TASK_QUEUE_PREFIX)
-                ? taskQueue
-                : string.Concat(TASK_QUEUE_PREFIX, taskQueue);
+            var trans = database.CreateTransaction();
 
-            var trans = db.CreateTransaction();
-
-            trans.HashIncrementAsync(TASK_QUEUE_COUNT_NAME, taskQueueName, 1);
+            trans.HashIncrementAsync(TaskQueueConstants.INFO_NAME, taskQueueName, 1);
             trans.ListLeftPushAsync(taskQueueName, jobInfo);
 
             trans.Execute();
 
-            _Subscriber
-                .Value
-                .Publish(TASK_QUEUE_CHANNEL, TASK_QUEUE_NEW_JOB, CommandFlags.FireAndForget);
+            _Subscriber.Value.Publish(
+                TaskQueueConstants.CHANNEL, 
+                TaskQueueConstants.NEW_JOB, 
+                CommandFlags.FireAndForget);
         }
 
         public void CleanUp()
         {
-            var redis = RedisManager
+            var database = RedisManager
                 .Current
-                .GetConnection();
+                .GetConnection()
+                .GetDatabase();
 
-            var db = redis.GetDatabase();
-
-            var hashes = db.HashGetAll(TASK_QUEUE_COUNT_NAME);
+            var hashes = database.HashGetAll(TaskQueueConstants.INFO_NAME);
             foreach (var hash in hashes)
             {
                 var taskQueueName = (string)hash.Name;
 
-                var trans = db.CreateTransaction();
+                var trans = database.CreateTransaction();
 
                 trans.AddCondition(Condition.HashLengthEqual(taskQueueName, 0));
-                trans.HashDeleteAsync(TASK_QUEUE_COUNT_NAME, taskQueueName);
+                trans.HashDeleteAsync(TaskQueueConstants.INFO_NAME, taskQueueName);
                 trans.KeyDeleteAsync(taskQueueName);
 
                 trans.Execute();
             }
         }
 
-        public void StartWorker(ITaskQueueJobHandler handler)
+        public void StartWorker(ITaskQueueJobHandler handler, string id)
         {
             if (_Worker != null)
                 throw new InvalidOperationException("Worker already started");
 
-            _Worker = new TaskQueueWorker(_Subscriber.Value, handler);
+            _Worker = new TaskQueueWorker(_Subscriber.Value, handler, id);
         }
         public void StopWorker()
         {
@@ -94,6 +83,21 @@ namespace Stef.RedisTaskQueue
 
             _Worker.Dispose();
             _Worker = null;
+        }
+
+        internal string GetLongTaskQueueName(string taskQueueName)
+        {
+            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX))
+                return taskQueueName;
+            else
+                return string.Concat(TaskQueueConstants.PREFIX, taskQueueName);
+        }
+        internal string GetShortTaskQueueName(string taskQueueName)
+        {
+            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX))
+                return taskQueueName.Substring(TaskQueueConstants.PREFIX.Length);
+            else
+                return taskQueueName;
         }
 
         private ISubscriber CreateSubscriber()

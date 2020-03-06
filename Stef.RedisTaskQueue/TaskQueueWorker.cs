@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using StackExchange.Redis;
 using Stef.RedisInfrastructure;
 
@@ -10,26 +11,41 @@ namespace Stef.RedisTaskQueue
     {
         private readonly ISubscriber _Subscriber;
         private readonly ITaskQueueJobHandler _Handler;
+        private readonly string _TaskQueueWorkingQueueName;
 
         private bool _IsWorking;
 
-        public TaskQueueWorker(ISubscriber subscriber, ITaskQueueJobHandler handler)
+        public TaskQueueWorker(ISubscriber subscriber, ITaskQueueJobHandler handler, string id)
         {
             _Subscriber = subscriber;
             _Handler = handler;
+            _TaskQueueWorkingQueueName = string.Concat(TaskQueueConstants.WORKING_PREFIX, id);
 
+            RestoreHangingJobs();
             SubscribeToNewJobs();
             CheckWork();
         }
 
+        private void RestoreHangingJobs()
+        {
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            database.ListRange(_TaskQueueWorkingQueueName, start: 0)
+                .ToList()
+                .ForEach(c => HandleJob(TaskQueueConstants.RESTORE_QUEUE_NAME, c));
+        }
+
         private void SubscribeToNewJobs()
         {
-            _Subscriber.Subscribe(TaskQueueManager.TASK_QUEUE_CHANNEL, CheckWork);
+            _Subscriber.Subscribe(TaskQueueConstants.CHANNEL, CheckWork);
         }
 
         private void CheckWork(RedisChannel channel, RedisValue value)
         {
-            if (value != TaskQueueManager.TASK_QUEUE_NEW_JOB)
+            if (value != TaskQueueConstants.NEW_JOB)
                 return;
 
             CheckWork();
@@ -59,53 +75,87 @@ namespace Stef.RedisTaskQueue
 
         private void SpreadJobsFairUse()
         {
-            var redis = RedisManager
-                .Current
-                .GetConnection();
-
-            var db = redis.GetDatabase();
-
             while (true)
             {
-                var taskQueueCountList = db
-                    .HashGetAll(TaskQueueManager.TASK_QUEUE_COUNT_NAME)
-                    .Select(c => new TaskQueueCountItem(c.Name, (long)c.Value))
-                    .Where(c => c.Count > 0)
-                    .ToList();
+                var taskQueueCountList = GetTaskQueueCountList();
 
                 if (!taskQueueCountList.Any())
                     break;
 
                 foreach (var taskQueue in taskQueueCountList.ToList())
                 {
-                    var trans = db.CreateTransaction();
-                    
-                    trans.AddCondition(Condition.ListLengthGreaterThan(taskQueue.TaskQueueName, 0));
-                    var value = db.ListRightPopLeftPushAsync(taskQueue.TaskQueueName, TaskQueueManager.TASK_QUEUE_WORKING_NAME);
-                    db.HashDecrement(TaskQueueManager.TASK_QUEUE_COUNT_NAME, taskQueue.TaskQueueName, 1);
-
-                    trans.Execute();
-
-                    if (value.Result.IsNull)
+                    var value = GetNextJob(taskQueue);
+                    if (value.IsNull)
                         continue;
 
-                    HandleJob(db, taskQueue, value.Result);
+                    HandleJob(taskQueue.TaskQueueName, value);
                 }
             }
         }
-
-        private void HandleJob(IDatabase db, TaskQueueCountItem taskQueue, RedisValue value)
+        private RedisValue GetNextJob(TaskQueueCountItem taskQueue)
         {
-            var taskQueueJob = new TaskQueueJob(value);
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            var trans = database.CreateTransaction();
+
+            var condition = Condition.ListLengthGreaterThan(taskQueue.TaskQueueName, 0);
+            trans.AddCondition(condition);
+
+            var value = database.ListRightPopLeftPushAsync(
+                taskQueue.TaskQueueName,
+                _TaskQueueWorkingQueueName);
+
+            database.HashDecrement(
+                TaskQueueConstants.INFO_NAME,
+                taskQueue.TaskQueueName, 
+                1);
+
+            trans.Execute();
+            return value.Result;
+        }
+        private List<TaskQueueCountItem> GetTaskQueueCountList()
+        {
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            return database
+                .HashGetAll(TaskQueueConstants.INFO_NAME)
+                .Select(c => new TaskQueueCountItem(c.Name, (long)c.Value))
+                .Where(c => c.Count > 0)
+                .ToList();
+        }
+
+        private void HandleJob(string taskQueueName, RedisValue value)
+        {
+            taskQueueName = TaskQueueManager.Current.GetShortTaskQueueName(taskQueueName);
+            var taskQueueJob = new TaskQueueJob(taskQueueName, value);
 
             try
             {
                 var result = _Handler.HandleJob(taskQueueJob);
 
                 if (result)
-                    db.ListRemove(TaskQueueManager.TASK_QUEUE_WORKING_NAME, value);
+                {
+                    var database = RedisManager
+                       .Current
+                       .GetConnection()
+                       .GetDatabase();
+
+                    database.ListRemove(
+                        _TaskQueueWorkingQueueName, 
+                        value);
+                }
                 else
-                    TaskQueueManager.Current.AddJob(taskQueue.TaskQueueName, value);
+                {
+                    TaskQueueManager.Current.AddJob(
+                        taskQueueName, 
+                        value);
+                }
             }
             catch (Exception ex)
             {
@@ -116,7 +166,7 @@ namespace Stef.RedisTaskQueue
         public void Dispose()
         {
             if (_Subscriber != null)
-                _Subscriber.Unsubscribe(TaskQueueManager.TASK_QUEUE_CHANNEL, CheckWork);
+                _Subscriber.Unsubscribe(TaskQueueConstants.CHANNEL, CheckWork);
         }
     }
 }

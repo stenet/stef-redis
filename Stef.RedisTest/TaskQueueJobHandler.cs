@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Threading;
 using Stef.RedisTaskQueue;
 
@@ -7,13 +8,19 @@ namespace Stef.RedisTest
     public class TaskQueueJobHandler : ITaskQueueJobHandler
     {
         private static Random _Random = new Random();
+        private static int _Count;
 
         public bool HandleJob(TaskQueueJob taskQueueJob)
         {
-            //var val = _Random.Next(200, 700);
-            //Thread.Sleep(val);
+            //if (_Count == 5)
+                //Debugger.Break();
 
-            Console.WriteLine($"Task: {taskQueueJob.JobInfo}");
+            _Count++;
+
+            var val = _Random.Next(100, 300);
+            Thread.Sleep(val);
+
+            Console.WriteLine($"{taskQueueJob.TaskQueueName}: {taskQueueJob.JobInfo}");
             return true;
         }
 
