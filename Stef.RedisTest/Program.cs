@@ -57,7 +57,7 @@ namespace Stef.RedisTest
                 TaskQueueManager.Current.AddJob("TEST03", "10");
             }
 
-            TaskQueueManager.Current.AddJob("TEST03", "PRIO", isHighPriority: true);
+            TaskQueueManager.Current.AddJob("TEST01", "PRIO", isHighPriority: true);
         }
 
         private static void RunLockTask(string taskName, bool throwException = false, int stealSeconds = -1)

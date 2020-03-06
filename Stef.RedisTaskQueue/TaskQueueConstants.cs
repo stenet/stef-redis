@@ -5,8 +5,8 @@ namespace Stef.RedisTaskQueue
 {
     internal static class TaskQueueConstants
     {
-        internal const string PREFIX_NORMAL_PRIORITY = "TASK_QUEUE_NORMAL_PRIORITY";
-        internal const string PREFIX_HIGH_PRIORITY = "TASK_QUEUE_HIGH_PRIORITY";
+        internal const string PREFIX_NORMAL_PRIORITY = "TASK_QUEUE_NORMAL_PRIORITY_";
+        internal const string PREFIX_HIGH_PRIORITY = "TASK_QUEUE_HIGH_PRIORITY_";
         internal const string PREFIX_WORKING = "TASK_QUEUE_WORKING_";
 
         internal const string RESTORE_QUEUE_NAME = "RESTORE";
