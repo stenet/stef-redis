@@ -31,7 +31,7 @@ namespace Stef.RedisInfrastructure
         private ConnectionMultiplexer CreateConnection()
         {
             if (string.IsNullOrEmpty(ConnectionString))
-                throw new ArgumentException("no ConnectionString defined");
+                throw new ArgumentException("No ConnectionString defined");
 
             return ConnectionMultiplexer.Connect(ConnectionString);
         }

@@ -1,77 +1,120 @@
 ﻿using Stef.RedisInfrastructure;
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Stef.RedisDistributedLock
 {
-    public class DistributedLock
+    public class DistributedLock : IDisposable
     {
-        private const string TOKEN = "TOKEN";
+        private const int DEFAULT_EXPIRY_S = 60;
+        private const int MIN_RETRY_MS = 5;
+        private const int MAX_RETRY_MS = 500;
+
+        private static string _Token;
 
         private readonly string _Key;
-        private readonly Action _Action;
-        private readonly int _ExpireSeconds;
-        private readonly int _WaitSeconds;
-        private readonly int _StealSeconds;
+        private bool _HasLock;
 
-        public DistributedLock(string key, Action action, int expireSeconds = 60, int waitSeconds = -1, int stealSeconds = -1)
+        static DistributedLock()
+        {
+            _Token = Guid.NewGuid().ToString();
+        }
+        private DistributedLock(string key)
         {
             _Key = key;
-            _Action = action;
-            _ExpireSeconds = expireSeconds;
-            _WaitSeconds = waitSeconds;
-            _StealSeconds = stealSeconds;
-
-            TryGetLock();
+            _HasLock = true;
         }
 
-        private void TryGetLock()
+        public static DistributedLock TryGetLock(string key)
+        {
+            return TryGetLockAsync(key)
+                .Result;
+        }
+        public static DistributedLock TryGetLock(string key, TimeSpan expiry)
+        {
+            return TryGetLockAsync(key, expiry)
+                .Result;
+        }
+        public static DistributedLock TryGetLock(string key, TimeSpan expiry, TimeSpan maxWait)
+        {
+            return TryGetLockAsync(key, expiry, maxWait)
+                .Result;
+        }
+
+        public static async Task<DistributedLock> TryGetLockAsync(string key)
+        {
+            return await TryGetLockAsync(key, TimeSpan.FromSeconds(DEFAULT_EXPIRY_S), TimeSpan.Zero);
+        }
+        public static async Task<DistributedLock> TryGetLockAsync(string key, TimeSpan expiry)
+        {
+            return await TryGetLockAsync(key, expiry, TimeSpan.Zero);
+        }
+        public static async Task<DistributedLock> TryGetLockAsync(string key, TimeSpan expiry, TimeSpan maxWait)
         {
             var database = RedisManager
                 .Current
                 .GetConnection()
                 .GetDatabase();
-
+            
             var start = DateTime.Now;
             Random random = null;
             while (true)
             {
-                var result = database.LockTake(
-                    _Key,
-                    TOKEN,
-                    TimeSpan.FromSeconds(_ExpireSeconds));
+                var result = database.LockTake(key, _Token, expiry);
 
                 if (result)
                     break;
 
-                if (_WaitSeconds > 0)
+                if (maxWait != TimeSpan.Zero)
                 {
-                    var seconds = (DateTime.Now - start).TotalSeconds;
-                    if (seconds >= _WaitSeconds)
-                        throw new InvalidOperationException("No lock received");
-                }
-
-                if (_StealSeconds > 0)
-                {
-                    var seconds = (DateTime.Now - start).TotalSeconds;
-                    if (seconds >= _StealSeconds)
-                        break;
+                    var waitHit = start.Add(maxWait) < DateTime.Now;
+                    if (waitHit)
+                        throw new LockTimeoutException();
                 }
 
                 if (random == null)
                     random = new Random();
 
-                Thread.Sleep(random.Next(10, 500));
+                await Task.Delay(random.Next(MIN_RETRY_MS, MAX_RETRY_MS));
             }
 
-            try
+            return new DistributedLock(key);
+        }
+
+        public void ExtendLock(TimeSpan expiry)
+        {
+            if (!_HasLock)
+                throw new LockTimeoutException();
+
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            var result = database.LockExtend(_Key, _Token, expiry);
+            if (!result)
+                throw new LockTimeoutException();
+        }
+
+        private void ReleaseLock()
+        {
+            if (_HasLock)
             {
-                _Action();
+                _HasLock = false;
+
+                var database = RedisManager
+                   .Current
+                   .GetConnection()
+                   .GetDatabase();
+
+                database.LockRelease(_Key, _Token);
             }
-            finally
-            {
-                database.LockRelease(_Key, TOKEN);
-            }
+        }
+
+        public void Dispose()
+        {
+            ReleaseLock();
         }
     }
 }

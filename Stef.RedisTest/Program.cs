@@ -18,19 +18,49 @@ namespace Stef.RedisTest
                 .Current
                 .ConnectionString = "localhost";
 
-            //TestLocks();
-            TestTasks(args.Any(c => c == "worker"));
+            //Do this in first place, as otherwise results in a TimeOut with TestLocks
+            var conn = RedisManager
+                .Current
+                .GetConnection();
+
+            TestLocks();
+            //TestTasks(args.Any(c => c == "worker"));
 
             Console.ReadLine();
         }
 
         private static void TestLocks()
         {
-            RunLockTask("1");
-            RunLockTask("2");
-            RunLockTask("3", true);
-            RunLockTask("4");
+            for (int i = 0; i < 100; i++)
+            {
+                RunLockTask("1");
+                RunLockTask("2");
+                RunLockTask("3", true);
+                RunLockTask("4");
+            }
         }
+        private static void RunLockTask(string taskName, bool throwException = false)
+        {
+            var task = Task.Run(async () =>
+            {
+                using (var l = await DistributedLock.TryGetLockAsync(LOCK_NAME))
+                {
+                    Console.WriteLine($"Start: {taskName}");
+                    Thread.Sleep(1000);
+
+                    if (throwException)
+                        throw new InvalidOperationException("all went wrong");
+
+                    Console.WriteLine($"Finish: {taskName}");
+                }
+            });
+
+            task.ContinueWith(t =>
+            {
+                Console.WriteLine($"Exception \"{t.Exception.Message}\" occured in task {taskName}");
+            }, TaskContinuationOptions.OnlyOnFaulted);
+        }
+
         private static void TestTasks(bool isWorker)
         {
             TaskQueueManager
@@ -58,28 +88,6 @@ namespace Stef.RedisTest
             }
 
             TaskQueueManager.Current.AddJob("TEST01", "PRIO", isHighPriority: true);
-        }
-
-        private static void RunLockTask(string taskName, bool throwException = false, int stealSeconds = -1)
-        {
-            var task = Task.Run(() =>
-            {
-                new DistributedLock(LOCK_NAME, () =>
-                {
-                    Console.WriteLine($"Start: {taskName}");
-                    Thread.Sleep(1000);
-
-                    if (throwException)
-                        throw new InvalidOperationException("all went wrong");
-
-                    Console.WriteLine($"Finish: {taskName}");
-                }, stealSeconds: stealSeconds);
-            });
-
-            task.ContinueWith(t =>
-            {
-                Console.WriteLine($"Exception \"{t.Exception.Message}\" occured in task {taskName}");
-            }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }
