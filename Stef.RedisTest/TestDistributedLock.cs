@@ -6,21 +6,31 @@ using System;
 namespace Stef.RedisTest
 {
     [TestClass]
-    public class UnitTestLocking
+    public class TestDistributedLock
     {
         [TestInitialize]
         public void Initialize()
         {
-            RedisManager.Current.ConnectionString = "localhost";
-            RedisManager.Current.GetConnection();
-
-            DistributedLock.OwnerIdentifier = "TEST";
         }
 
         [TestMethod]
         public void TestGetLock()
         {
             var key = Guid.NewGuid().ToString();
+
+            using (var l = DistributedLock.TryGetLock(key))
+            {
+                Assert.IsTrue(l.HasLock, "should have lock");
+            }
+        }
+        [TestMethod]
+        public void TestGetLockSequential()
+        {
+            var key = Guid.NewGuid().ToString();
+
+            using (var l = DistributedLock.TryGetLock(key))
+            {
+            }
 
             using (var l = DistributedLock.TryGetLock(key))
             {
