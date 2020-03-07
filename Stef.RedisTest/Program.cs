@@ -31,6 +31,16 @@ namespace Stef.RedisTest
 
         private static void TestLocks()
         {
+            var lockName = "TEST2";
+            var primLock = DistributedLock.GetLock(lockName);
+            
+            DistributedLock.OwnerIdentifier = "STEFAN";
+            DistributedLock.ReleaseLock(lockName);
+
+            var secLock = DistributedLock.GetLock(lockName);
+
+            return;
+
             for (int i = 0; i < 100; i++)
             {
                 RunLockTask("1");
@@ -43,13 +53,10 @@ namespace Stef.RedisTest
         {
             var task = Task.Run(async () =>
             {
-                using (var l = await DistributedLock.TryGetLockAsync(LOCK_NAME))
+                using (var l = await DistributedLock.GetLockAsync(LOCK_NAME))
                 {
                     Console.WriteLine($"Start: {taskName}");
                     Thread.Sleep(1000);
-
-                    if (throwException)
-                        throw new InvalidOperationException("all went wrong");
 
                     Console.WriteLine($"Finish: {taskName}");
                 }
