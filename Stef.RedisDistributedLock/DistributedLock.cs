@@ -51,16 +51,6 @@ namespace Stef.RedisDistributedLock
                 throw new LockTimeoutException();
         }
 
-        public static string GetCurrentLockOwner(string key)
-        {
-            var database = RedisManager
-                .Current
-                .GetConnection()
-                .GetDatabase();
-
-            return database.LockQuery(key);
-        }
-
         public static DistributedLock GetLock(string key)
         {
             return GetLockAsync(key)
@@ -94,6 +84,16 @@ namespace Stef.RedisDistributedLock
             return distributedLock;
         }
 
+        public static string GetLockOwner(string key)
+        {
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            return database.LockQuery(key);
+        }
+
         public static void ReleaseLock(string key)
         {
             var database = RedisManager
@@ -101,7 +101,7 @@ namespace Stef.RedisDistributedLock
                 .GetConnection()
                 .GetDatabase();
 
-            var lockOwner = GetCurrentLockOwner(key);
+            var lockOwner = GetLockOwner(key);
             if (string.IsNullOrEmpty(lockOwner))
                 return;
 
@@ -152,7 +152,7 @@ namespace Stef.RedisDistributedLock
                 {
                     var waitHit = start.Add(maxWait) < DateTime.Now;
                     if (waitHit)
-                        return new DistributedLock(key, false, GetCurrentLockOwner(key));
+                        return new DistributedLock(key, false, GetLockOwner(key));
                 }
 
                 if (random == null)

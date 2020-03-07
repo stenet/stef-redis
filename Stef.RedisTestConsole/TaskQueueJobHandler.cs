@@ -3,7 +3,7 @@ using System.Diagnostics;
 using System.Threading;
 using Stef.RedisTaskQueue;
 
-namespace Stef.RedisTest
+namespace Stef.RedisTestConsole
 {
     public class TaskQueueJobHandler : ITaskQueueJobHandler
     {

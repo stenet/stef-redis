@@ -104,11 +104,11 @@ namespace Stef.RedisTaskQueue
             var condition = Condition.ListLengthGreaterThan(taskQueue.TaskQueueName, 0);
             trans.AddCondition(condition);
 
-            var value = database.ListRightPopLeftPushAsync(
+            var value = trans.ListRightPopLeftPushAsync(
                 taskQueue.TaskQueueName,
                 _TaskQueueWorkingQueueName);
 
-            database.HashDecrement(
+            trans.HashDecrementAsync(
                 TaskQueueConstants.INFO_NAME,
                 taskQueue.TaskQueueName, 
                 1);

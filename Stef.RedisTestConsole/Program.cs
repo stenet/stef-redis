@@ -6,7 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Stef.RedisTest
+namespace Stef.RedisTestConsole
 {
     class Program
     {
