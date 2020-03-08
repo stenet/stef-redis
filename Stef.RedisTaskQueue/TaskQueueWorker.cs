@@ -7,40 +7,66 @@ using Stef.RedisInfrastructure;
 
 namespace Stef.RedisTaskQueue
 {
-    internal class TaskQueueWorker : IDisposable
+    public class TaskQueueWorker : IDisposable
     {
         private readonly ISubscriber _Subscriber;
         private readonly ITaskQueueJobHandler _Handler;
-        private readonly string _TaskQueueWorkingQueueName;
+        private readonly string _WorkerId;
+        private readonly string _GroupName;
+        private readonly string _InfoName;
+        private readonly string _WorkingQueueName;
+        private readonly Action<TaskQueueWorker> _OnDispose;
 
-        private bool _IsWorking;
-
-        public TaskQueueWorker(ISubscriber subscriber, ITaskQueueJobHandler handler, string id)
+        internal TaskQueueWorker(
+            ISubscriber subscriber, 
+            ITaskQueueJobHandler handler, 
+            string workerId, 
+            string groupName,
+            Action<TaskQueueWorker> onDispose)
         {
             _Subscriber = subscriber;
             _Handler = handler;
-            _TaskQueueWorkingQueueName = string.Concat(TaskQueueConstants.PREFIX_WORKING, id);
+            _WorkerId = workerId;
+            _GroupName = groupName;
+            _OnDispose = onDispose;
 
-            RestoreHangingJobs();
-            SubscribeToNewJobs();
-            CheckWork();
+            _InfoName = TaskQueueManager.Current.GetFullInfoName(groupName);
+            _WorkingQueueName = TaskQueueManager.Current.GetFullWorkingName(groupName, workerId);
         }
 
-        private void RestoreHangingJobs()
+        public Task InitializationTask { get; private set; }
+        public bool IsWorking { get; private set; }
+
+        internal void Start()
+        {
+            InitializationTask = StartAsync();
+        }
+        private async Task StartAsync()
+        {
+            await RestoreHangingJobsAsync();
+            SubscribeToNewJobs();
+            await CheckWorkAsync();
+        }
+
+        private async Task RestoreHangingJobsAsync()
         {
             var database = RedisManager
                 .Current
                 .GetConnection()
                 .GetDatabase();
 
-            database.ListRange(_TaskQueueWorkingQueueName, start: 0)
-                .ToList()
-                .ForEach(c => HandleJob(TaskQueueConstants.RESTORE_QUEUE_NAME, c));
+            var workQueueList = database.ListRange(_WorkingQueueName, start: 0);
+            foreach (var workQueue in workQueueList)
+            {
+                 await HandleJobAsync(TaskQueueConstants.RESTORE_QUEUE_NAME, workQueue);
+            }
         }
 
         private void SubscribeToNewJobs()
         {
-            _Subscriber.Subscribe(TaskQueueConstants.CHANNEL, CheckWork);
+            _Subscriber.Subscribe(
+                TaskQueueManager.Current.GetFullChannelName(_GroupName),
+                CheckWork);
         }
 
         private void CheckWork(RedisChannel channel, RedisValue value)
@@ -48,36 +74,36 @@ namespace Stef.RedisTaskQueue
             if (value != TaskQueueConstants.NEW_JOB)
                 return;
 
-            CheckWork();
+            _ = CheckWorkAsync();
         }
-        private void CheckWork()
+        private async Task CheckWorkAsync()
         {
             lock (this)
             {
-                if (_IsWorking)
+                if (IsWorking)
                     return;
 
-                _IsWorking = true;
+                IsWorking = true;
             }
 
             try
             {
-                SpreadJobsFairUse();
+                await SpreadJobsFairUseAsync();
             }
             finally
             {
                 lock (this)
                 {
-                    _IsWorking = false;
+                    IsWorking = false;
                 }
             }
         }
 
-        private void SpreadJobsFairUse()
+        private async Task SpreadJobsFairUseAsync()
         {
             while (true)
             {
-                var taskQueueCountList = GetTaskQueueCountList();
+                var taskQueueCountList = TaskQueueManager.Current.GetQueues(_GroupName);
 
                 if (!taskQueueCountList.Any())
                     break;
@@ -88,7 +114,7 @@ namespace Stef.RedisTaskQueue
                     if (value.IsNull)
                         continue;
 
-                    HandleJob(taskQueue.TaskQueueName, value);
+                    await HandleJobAsync(taskQueue.FullQueueName, value);
                 }
             }
         }
@@ -101,55 +127,30 @@ namespace Stef.RedisTaskQueue
 
             var trans = database.CreateTransaction();
 
-            var condition = Condition.ListLengthGreaterThan(taskQueue.TaskQueueName, 0);
+            var condition = Condition.ListLengthGreaterThan(taskQueue.FullQueueName, 0);
             trans.AddCondition(condition);
 
             var value = trans.ListRightPopLeftPushAsync(
-                taskQueue.TaskQueueName,
-                _TaskQueueWorkingQueueName);
+                taskQueue.FullQueueName,
+                _WorkingQueueName);
 
             trans.HashDecrementAsync(
-                TaskQueueConstants.INFO_NAME,
-                taskQueue.TaskQueueName, 
+                _InfoName,
+                taskQueue.FullQueueName, 
                 1);
 
             trans.Execute();
             return value.Result;
         }
-        private List<TaskQueueCountItem> GetTaskQueueCountList()
+
+        private async Task HandleJobAsync(string queueName, string value)
         {
-            var database = RedisManager
-                .Current
-                .GetConnection()
-                .GetDatabase();
-
-            var itemList = database
-                .HashGetAll(TaskQueueConstants.INFO_NAME)
-                .Select(c => new TaskQueueCountItem(c.Name, (long)c.Value))
-                .Where(c => c.Count > 0)
-                .ToList();
-
-            var hasHighPriority = itemList
-                .Any(c => c.TaskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY));
-
-            if (hasHighPriority)
-            {
-                return itemList
-                    .Where(c => c.TaskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY))
-                    .ToList();
-            }
-
-            return itemList;
-        }
-
-        private void HandleJob(string taskQueueName, RedisValue value)
-        {
-            taskQueueName = TaskQueueManager.Current.GetShortTaskQueueName(taskQueueName);
-            var taskQueueJob = new TaskQueueJob(taskQueueName, value);
+            var name = TaskQueueManager.Current.GetQueueName(queueName);
+            var taskQueueJob = new TaskQueueJob(_WorkerId, name.GroupName, name.QueueName, value);
 
             try
             {
-                var result = _Handler.HandleJob(taskQueueJob);
+                var result = await _Handler.HandleJobAsync(taskQueueJob);
 
                 if (result)
                 {
@@ -159,13 +160,14 @@ namespace Stef.RedisTaskQueue
                        .GetDatabase();
 
                     database.ListRemove(
-                        _TaskQueueWorkingQueueName, 
+                        _WorkingQueueName, 
                         value);
                 }
                 else
                 {
                     TaskQueueManager.Current.AddJob(
-                        taskQueueName, 
+                        _GroupName,
+                        name.QueueName, 
                         value);
                 }
             }
@@ -177,8 +179,14 @@ namespace Stef.RedisTaskQueue
 
         public void Dispose()
         {
+            _OnDispose(this);
+
             if (_Subscriber != null)
-                _Subscriber.Unsubscribe(TaskQueueConstants.CHANNEL, CheckWork);
+            {
+                _Subscriber.Unsubscribe(
+                    TaskQueueManager.Current.GetFullChannelName(_GroupName), 
+                    CheckWork);
+            }
         }
     }
 }

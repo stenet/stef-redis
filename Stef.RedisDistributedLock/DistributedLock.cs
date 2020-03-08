@@ -15,7 +15,7 @@ namespace Stef.RedisDistributedLock
 
         static DistributedLock()
         {
-            OwnerIdentifier = Guid.NewGuid().ToString();
+            Owner = Guid.NewGuid().ToString();
 
             DefaultExpiry = TimeSpan.FromSeconds(DEFAULT_EXPIRY_S);
             DefaultMaxWait = TimeSpan.Zero;
@@ -28,7 +28,7 @@ namespace Stef.RedisDistributedLock
             CurrentLockOwner = lockOwner;
         }
 
-        public static string OwnerIdentifier { get; set; }
+        public static string Owner { get; set; }
 
         public static TimeSpan DefaultExpiry { get; private set; }
         public static TimeSpan DefaultMaxWait { get; private set; }
@@ -36,6 +36,10 @@ namespace Stef.RedisDistributedLock
         public bool HasLock { get; private set; }
         public string CurrentLockOwner { get; private set; }
 
+        public void ExtendLock()
+        {
+            ExtendLock(DefaultExpiry);
+        }
         public void ExtendLock(TimeSpan expiry)
         {
             if (!HasLock)
@@ -46,7 +50,7 @@ namespace Stef.RedisDistributedLock
                 .GetConnection()
                 .GetDatabase();
 
-            var result = database.LockExtend(_Key, OwnerIdentifier, expiry);
+            var result = database.LockExtend(_Key, Owner, expiry);
             if (!result)
                 throw new LockTimeoutException();
         }
@@ -143,7 +147,7 @@ namespace Stef.RedisDistributedLock
             Random random = null;
             while (true)
             {
-                var result = database.LockTake(key, OwnerIdentifier, expiry);
+                var result = database.LockTake(key, Owner, expiry);
 
                 if (result)
                     break;
@@ -161,7 +165,7 @@ namespace Stef.RedisDistributedLock
                 await Task.Delay(random.Next(MIN_RETRY_MS, MAX_RETRY_MS));
             }
 
-            return new DistributedLock(key, true, OwnerIdentifier);
+            return new DistributedLock(key, true, Owner);
         }
         
         private void ReleaseMyLock()
@@ -175,7 +179,7 @@ namespace Stef.RedisDistributedLock
                    .GetConnection()
                    .GetDatabase();
 
-                database.LockRelease(_Key, OwnerIdentifier);
+                database.LockRelease(_Key, Owner);
             }
         }
 

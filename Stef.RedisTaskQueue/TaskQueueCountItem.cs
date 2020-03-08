@@ -3,15 +3,18 @@ using System.Linq;
 
 namespace Stef.RedisTaskQueue
 {
-    internal class TaskQueueCountItem
+    public class TaskQueueCountItem
     {
-        public TaskQueueCountItem(string taskQueueName, long count)
+        internal TaskQueueCountItem(string fullQueueName, string queueName, long count)
         {
-            TaskQueueName = taskQueueName;
+            FullQueueName = fullQueueName;
+            QueueName = queueName;
             Count = count;
         }
 
-        public string TaskQueueName { get; private set; }
+        public string QueueName { get; private set; }
         public long Count { get; private set; }
+
+        internal string FullQueueName { get; set; }
     }
 }

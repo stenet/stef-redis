@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Stef.RedisDistributedLock\Stef.RedisDistributedLock.csproj" />
     <ProjectReference Include="..\Stef.RedisInfrastructure\Stef.RedisInfrastructure.csproj" />
+    <ProjectReference Include="..\Stef.RedisTaskQueue\Stef.RedisTaskQueue.csproj" />
   </ItemGroup>
 
 </Project>

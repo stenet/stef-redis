@@ -1,7 +1,7 @@
+using System;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Stef.RedisDistributedLock;
-using Stef.RedisInfrastructure;
-using System;
 
 namespace Stef.RedisTest
 {
@@ -12,6 +12,11 @@ namespace Stef.RedisTest
         public void Initialize()
         {
         }
+        [TestCleanup]
+        public void Cleanup()
+        {
+            DistributedLock.Owner = RedisTest.Initialize.DEFAULT_OWNER;
+        }
 
         [TestMethod]
         public void TestGetLock()
@@ -20,7 +25,7 @@ namespace Stef.RedisTest
 
             using (var l = DistributedLock.TryGetLock(key))
             {
-                Assert.IsTrue(l.HasLock, "should have lock");
+                Assert.IsTrue(l.HasLock);
             }
         }
         [TestMethod]
@@ -34,7 +39,7 @@ namespace Stef.RedisTest
 
             using (var l = DistributedLock.TryGetLock(key))
             {
-                Assert.IsTrue(l.HasLock, "should have lock");
+                Assert.IsTrue(l.HasLock);
             }
         }
         [TestMethod]
@@ -44,7 +49,7 @@ namespace Stef.RedisTest
 
             using (var l = DistributedLock.TryGetLock(key))
             {
-                Assert.AreEqual(l.CurrentLockOwner, DistributedLock.OwnerIdentifier, $"should has lock owner ${DistributedLock.OwnerIdentifier}");
+                Assert.AreEqual(DistributedLock.Owner, l.CurrentLockOwner);
             }
         }
         [TestMethod]
@@ -55,7 +60,7 @@ namespace Stef.RedisTest
             using (var l = DistributedLock.TryGetLock(key))
             {
                 var lockOwner = DistributedLock.GetLockOwner(key);
-                Assert.AreEqual(lockOwner, DistributedLock.OwnerIdentifier, $"should has lock owner ${DistributedLock.OwnerIdentifier}");
+                Assert.AreEqual(DistributedLock.Owner, lockOwner);
             }
         }
         [TestMethod]
@@ -67,7 +72,7 @@ namespace Stef.RedisTest
             {
                 using (var l2 = DistributedLock.TryGetLock(key, DistributedLock.DefaultExpiry, TimeSpan.FromSeconds(1)))
                 {
-                    Assert.IsFalse(l2.HasLock, "shouldn't have lock");
+                    Assert.IsFalse(l2.HasLock);
                 }
             }
         }
@@ -82,9 +87,8 @@ namespace Stef.RedisTest
                 {
                     using (var l2 = DistributedLock.GetLock(key, DistributedLock.DefaultExpiry, TimeSpan.FromSeconds(1)))
                     {
-
                     }
-                }, "should throw exception");
+                });
             }
         }
         [TestMethod]
@@ -94,12 +98,52 @@ namespace Stef.RedisTest
 
             using (var l1 = DistributedLock.TryGetLock(key))
             {
-                DistributedLock.ReleaseLock(key);
+                var newOwner = "TEST2";
 
-                using (var l2 = DistributedLock.GetLock(key, DistributedLock.DefaultExpiry, TimeSpan.FromSeconds(1)))
+                try
                 {
-                    Assert.IsTrue(l2.HasLock, "should have stolen lock");
+                    DistributedLock.Owner = newOwner;
+                    DistributedLock.ReleaseLock(key);
+
+                    using (var l2 = DistributedLock.GetLock(key, DistributedLock.DefaultExpiry, TimeSpan.FromSeconds(1)))
+                    {
+                        Assert.IsTrue(l2.HasLock);
+                        Assert.AreEqual(newOwner, l2.CurrentLockOwner);
+                    }
                 }
+                finally
+                {
+                }
+            }
+        }
+        [TestMethod]
+        public async Task TestExtend()
+        {
+            var key = Guid.NewGuid().ToString();
+
+            using (var l1 = DistributedLock.TryGetLock(key, TimeSpan.FromMilliseconds(200)))
+            {
+                l1.ExtendLock();
+
+                await Task.Delay(300);
+
+                var lockOwner = DistributedLock.GetLockOwner(key);
+                Assert.AreEqual(RedisTest.Initialize.DEFAULT_OWNER, lockOwner);
+            }
+        }
+        [TestMethod]
+        public async Task TestExtendFail()
+        {
+            var key = Guid.NewGuid().ToString();
+
+            using (var l1 = DistributedLock.TryGetLock(key, TimeSpan.FromMilliseconds(200)))
+            {
+                await Task.Delay(300);
+
+                Assert.ThrowsException<LockTimeoutException>(() =>
+                {
+                    l1.ExtendLock();
+                });
             }
         }
     }

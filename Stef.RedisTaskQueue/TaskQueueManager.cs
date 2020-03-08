@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using StackExchange.Redis;
 using Stef.RedisInfrastructure;
@@ -9,11 +10,12 @@ namespace Stef.RedisTaskQueue
     {
         private static Lazy<TaskQueueManager> _Current = new Lazy<TaskQueueManager>(() => new TaskQueueManager());
 
-        private TaskQueueWorker _Worker;
         private Lazy<ISubscriber> _Subscriber;
+        private List<TaskQueueWorker> _WorkerList;
 
         private TaskQueueManager()
         {
+            _WorkerList = new List<TaskQueueWorker>();
             _Subscriber = new Lazy<ISubscriber>(CreateSubscriber);
         }
 
@@ -25,85 +27,206 @@ namespace Stef.RedisTaskQueue
             }
         }
 
-        public void AddJob(string taskQueueName, string jobInfo, bool isHighPriority = false)
+        public void AddJob(string groupName, string queueName, string jobInfo)
         {
+            ValidateParameters(groupName, queueName, jobInfo);
+
             var database = RedisManager
                 .Current
                 .GetConnection()
                 .GetDatabase();
 
-            taskQueueName = GetLongTaskQueueName(taskQueueName, isHighPriority);
+            var infoName = GetFullInfoName(groupName);
+            var channelName = GetFullChannelName(groupName);
+            queueName = GetFullTaskQueueName(groupName, queueName);
 
             var trans = database.CreateTransaction();
 
-            trans.HashIncrementAsync(TaskQueueConstants.INFO_NAME, taskQueueName, 1);
-            trans.ListLeftPushAsync(taskQueueName, jobInfo);
+            trans.SetAddAsync(TaskQueueConstants.GROUP_NAME, groupName);
+            trans.HashIncrementAsync(infoName, queueName, 1);
+            trans.ListLeftPushAsync(queueName, jobInfo);
 
             trans.Execute();
 
             _Subscriber.Value.Publish(
-                TaskQueueConstants.CHANNEL, 
-                TaskQueueConstants.NEW_JOB, 
+                channelName,
+                TaskQueueConstants.NEW_JOB,
                 CommandFlags.FireAndForget);
         }
+        private void ValidateParameters(string groupName, string queueName, string jobInfo)
+        {
+            if (string.IsNullOrEmpty(groupName))
+                throw new ArgumentException($"{nameof(groupName)} is null or empty.", nameof(groupName));
 
-        public void CleanUp()
+            if (string.IsNullOrEmpty(queueName))
+                throw new ArgumentException($"{nameof(queueName)} is null or empty.", nameof(queueName));
+
+            if (string.IsNullOrEmpty(jobInfo))
+                throw new ArgumentException($"{nameof(jobInfo)} is null or empty.", nameof(jobInfo));
+
+            ValidateName(groupName, nameof(groupName));
+            ValidateName(queueName, nameof(queueName));
+        }
+        private void ValidateName(string name, string propertyName)
+        {
+            if (name.Contains(";"))
+                throw new ArgumentException($"Semicolon not allowed in {propertyName}: {name}");
+        }
+
+        public void CleanUp(bool force = false)
         {
             var database = RedisManager
                 .Current
                 .GetConnection()
                 .GetDatabase();
 
-            var hashes = database.HashGetAll(TaskQueueConstants.INFO_NAME);
+            var groups = database.SetMembers(TaskQueueConstants.GROUP_NAME);
+            foreach (var groupName in groups)
+            {
+                var infoName = GetFullInfoName(groupName);
+
+                CleanUpHashAndQueue(database, infoName, force);
+                CleanUpGroup(database, groupName, infoName, force);
+            }
+        }
+        private void CleanUpHashAndQueue(IDatabase database, string infoName, bool force)
+        {
+            var hashes = database.HashGetAll(infoName);
             foreach (var hash in hashes)
             {
                 var taskQueueName = (string)hash.Name;
 
                 var trans = database.CreateTransaction();
 
-                trans.AddCondition(Condition.HashLengthEqual(taskQueueName, 0));
-                trans.HashDeleteAsync(TaskQueueConstants.INFO_NAME, taskQueueName);
+                if (!force)
+                    trans.AddCondition(Condition.HashLengthEqual(taskQueueName, 0));
+
+                trans.HashDeleteAsync(infoName, taskQueueName);
                 trans.KeyDeleteAsync(taskQueueName);
 
                 trans.Execute();
             }
         }
-
-        public void StartWorker(ITaskQueueJobHandler handler, string id)
+        private void CleanUpGroup(IDatabase database, string groupName, string infoName, bool force)
         {
-            if (_Worker != null)
-                throw new InvalidOperationException("Worker already started");
+            var trans = database.CreateTransaction();
 
-            _Worker = new TaskQueueWorker(_Subscriber.Value, handler, id);
-        }
-        public void StopWorker()
-        {
-            if (_Worker == null)
-                return;
+            if (!force)
+                trans.AddCondition(Condition.HashLengthEqual(infoName, 0));
 
-            _Worker.Dispose();
-            _Worker = null;
+            trans.SetRemoveAsync(TaskQueueConstants.GROUP_NAME, groupName);
+
+            trans.Execute();
         }
 
-        internal string GetLongTaskQueueName(string taskQueueName, bool isHighPriority)
+        public TaskQueueWorker CreateWorker(ITaskQueueJobHandler handler, string groupName, string workerId)
         {
-            var prefix = isHighPriority
-                ? TaskQueueConstants.PREFIX_HIGH_PRIORITY
-                : TaskQueueConstants.PREFIX_NORMAL_PRIORITY;
+            if (handler == null)
+                throw new ArgumentNullException(nameof(handler), $"{nameof(handler)} is null.");
 
-            if (taskQueueName.StartsWith(prefix))
-                return taskQueueName;
+            if (string.IsNullOrEmpty(groupName))
+                throw new ArgumentException($"{nameof(groupName)} is null or empty.", nameof(groupName));
+
+            if (string.IsNullOrEmpty(workerId))
+                throw new ArgumentException($"{nameof(workerId)} is null or empty.", nameof(workerId));
+
+            ValidateName(groupName, "groupName");
+
+            var worker = new TaskQueueWorker(
+                _Subscriber.Value, 
+                handler, 
+                workerId, 
+                groupName,
+                (w) => _WorkerList.Remove(w));
+
+            _WorkerList.Add(worker);
+            worker.Start();
+
+            return worker;
+        }
+        public void StopAllWorkers()
+        {
+            while (_WorkerList.Any())
+            {
+                var worker = _WorkerList.First();
+                worker.Dispose();
+
+                _WorkerList.Remove(worker);
+            }
+        }
+        public IEnumerable<TaskQueueWorker> GetWorkers()
+        {
+            return _WorkerList.AsEnumerable();
+        }
+
+        public IEnumerable<string> GetGroups()
+        {
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            return database
+                .SetMembers(TaskQueueConstants.GROUP_NAME)
+                .Select(c => (string)c)
+                .ToList();
+        }
+        public IEnumerable<TaskQueueCountItem> GetQueues(string groupName)
+        {
+            var database = RedisManager
+                .Current
+                .GetConnection()
+                .GetDatabase();
+
+            var infoName = GetFullInfoName(groupName);
+
+            return database
+                .HashGetAll(infoName)
+                .Select(c => new TaskQueueCountItem(c.Name, GetQueueName(c.Name).QueueName, (long)c.Value))
+                .Where(c => c.Count > 0)
+                .ToList();
+        }
+
+        internal string GetFullTaskQueueName(string groupName, string queueName)
+        {
+            return string.Concat(
+                TaskQueueConstants.QUEUE_PREFIX,
+                ";",
+                groupName,
+                ";",
+                queueName);
+        }
+        internal string GetFullInfoName(string groupName)
+        {
+            return string.Concat(
+                TaskQueueConstants.INFO_NAME,
+                ";",
+                groupName);
+        }
+        internal string GetFullChannelName(string groupName)
+        {
+            return string.Concat(
+                TaskQueueConstants.CHANNEL,
+                ";",
+                groupName);
+        }
+        internal string GetFullWorkingName(string groupName, string workerId)
+        {
+            return string.Concat(
+                TaskQueueConstants.WORKING_PREFIX,
+                ";",
+                groupName,
+                ";",
+                workerId);
+        }
+        internal TaskQueueName GetQueueName(string queueName)
+        {
+            var tokens = queueName.Split(';');
+
+            if (tokens.Length == 2)
+                return new TaskQueueName(tokens[0], tokens[1]);
             else
-                return string.Concat(prefix, taskQueueName);
-        }
-        internal string GetShortTaskQueueName(string taskQueueName)
-        {
-            if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX_NORMAL_PRIORITY))
-                return taskQueueName.Substring(TaskQueueConstants.PREFIX_NORMAL_PRIORITY.Length);
-            else if (taskQueueName.StartsWith(TaskQueueConstants.PREFIX_HIGH_PRIORITY))
-                return taskQueueName.Substring(TaskQueueConstants.PREFIX_HIGH_PRIORITY.Length);
-            else
-                return taskQueueName;
+                return new TaskQueueName(tokens[1], tokens[2]);
         }
 
         private ISubscriber CreateSubscriber()
