@@ -315,7 +315,7 @@ namespace Stef.RedisTest
         [TestMethod]
         public void TestValidateGroupName()
         {
-            var group = "a;b";
+            var group = "a:b";
             var jobInfo = group;
 
             Assert.ThrowsException<ArgumentException>(() =>
@@ -332,7 +332,7 @@ namespace Stef.RedisTest
         {
             var group = Guid.NewGuid().ToString();
             var jobInfo = group;
-            var queue = "a;b";
+            var queue = "a:b";
 
             Assert.ThrowsException<ArgumentException>(() =>
             {

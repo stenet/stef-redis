@@ -8,6 +8,8 @@ namespace Stef.RedisTaskQueue
 {
     public class TaskQueueManager
     {
+        private const char NAMESPACE_SEPARATOR = ':';
+
         private static Lazy<TaskQueueManager> _Current = new Lazy<TaskQueueManager>(() => new TaskQueueManager());
 
         private Lazy<ISubscriber> _Subscriber;
@@ -69,7 +71,7 @@ namespace Stef.RedisTaskQueue
         }
         private void ValidateName(string name, string propertyName)
         {
-            if (name.Contains(";"))
+            if (name.Contains(NAMESPACE_SEPARATOR))
                 throw new ArgumentException($"Semicolon not allowed in {propertyName}: {name}");
         }
 
@@ -191,37 +193,37 @@ namespace Stef.RedisTaskQueue
         {
             return string.Concat(
                 TaskQueueConstants.QUEUE_PREFIX,
-                ";",
+                NAMESPACE_SEPARATOR,
                 groupName,
-                ";",
+                NAMESPACE_SEPARATOR,
                 queueName);
         }
         internal string GetFullInfoName(string groupName)
         {
             return string.Concat(
                 TaskQueueConstants.INFO_NAME,
-                ";",
+                NAMESPACE_SEPARATOR,
                 groupName);
         }
         internal string GetFullChannelName(string groupName)
         {
             return string.Concat(
                 TaskQueueConstants.CHANNEL,
-                ";",
+                NAMESPACE_SEPARATOR,
                 groupName);
         }
         internal string GetFullWorkingName(string groupName, string workerId)
         {
             return string.Concat(
                 TaskQueueConstants.WORKING_PREFIX,
-                ";",
+                NAMESPACE_SEPARATOR,
                 groupName,
-                ";",
+                NAMESPACE_SEPARATOR,
                 workerId);
         }
         internal TaskQueueName GetQueueName(string queueName)
         {
-            var tokens = queueName.Split(';');
+            var tokens = queueName.Split(NAMESPACE_SEPARATOR);
 
             if (tokens.Length == 2)
                 return new TaskQueueName(tokens[0], tokens[1]);
